@@ -362,6 +362,11 @@ printf 'requested: from the panel\nnotbefore=0\n' >"${tmp}/restart-marker"
 ic clear-stale-restart "$((now - 100))"
 check "one asked for after the files were read is kept" "0" "$(status test -f "${tmp}/restart-marker")"
 touch -d '2 minutes ago' "${tmp}/restart-marker"
+ic state running >/dev/null
+ic restart >/dev/null
+ic clear-stale-restart "$((now - 10))"
+check "a second request touches the marker, so a change saved after the files were read is not dropped" "0" "$(status test -f "${tmp}/restart-marker")"
+touch -d '2 minutes ago' "${tmp}/restart-marker"
 echo '{"name": "x"}' >"${data}/flux/restore-pending.json"
 ic clear-stale-restart "${now}"
 check "and so is any when a restore is waiting" "0" "$(status test -f "${tmp}/restart-marker")"

@@ -1518,13 +1518,24 @@ def restore_backup(row):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def touch_or_make_marker(why, not_before):
+    """The restart marker, made or, when one is already there, touched: its modification time is the moment of the
+    LATEST request, which `clear-stale-restart` compares with the moment the files were read."""
+    if os.path.exists(RESTART_MARKER):
+        try:
+            os.utime(RESTART_MARKER, None)
+        except OSError:
+            pass
+        return
+    with open(RESTART_MARKER, "w", encoding="utf-8") as f:
+        f.write(f"{why}\nnotbefore={not_before}\n")
+
+
 def request_restart(why):
     state = load_state()
     if state.get("state") not in ("running", "starting", "updating", "restarting"):
         return False
-    if not os.path.exists(RESTART_MARKER):
-        with open(RESTART_MARKER, "w", encoding="utf-8") as f:
-            f.write(f"requested: {why}\nnotbefore=0\n")
+    touch_or_make_marker(f"requested: {why}", 0)
     return True
 
 
@@ -1709,12 +1720,10 @@ def cmd_restart(_args):
     state = load_state()
     if state.get("state") not in ("running", "starting", "updating", "restarting"):
         fail("The server is not running.")
-    if not os.path.exists(RESTART_MARKER):
-        not_before = 0
-        if state.get("state") == "running" and state.get("runningSince"):
-            not_before = int(state["runningSince"]) + SETTLE_SECONDS
-        with open(RESTART_MARKER, "w", encoding="utf-8") as f:
-            f.write(f"requested: from the panel\nnotbefore={not_before}\n")
+    not_before = 0
+    if state.get("state") == "running" and state.get("runningSince"):
+        not_before = int(state["runningSince"]) + SETTLE_SECONDS
+    touch_or_make_marker("requested: from the panel", not_before)
     out({"ok": True, "restarting": True})
 
 
