@@ -315,7 +315,9 @@ start_generation() {
   while IFS= read -r line; do flux_log "restore: ${line#\# }"; done < <(ic do-restore 2>&1)
   backup_save "start"
 
-  local applied
+  # A restart the panel asked for before this moment is covered by what apply and the mods step read now.
+  local applied apply_started
+  apply_started="$(date -u +%s)"
   if applied="$(ic apply 2>/tmp/flux-apply.err)"; then
     while IFS= read -r line; do [ -n "${line}" ] && flux_log "config: ${line#\# }"; done <<<"${applied}"
   else
@@ -341,6 +343,10 @@ start_generation() {
   : >"${current}"
   flux_prune "${FLUX_GAME_LOG_DIR}" '*-server.log' "${FLUX_GAME_LOG_KEEP}"
   [ "${terminating}" = "1" ] && return 2
+
+  # A restart asked for while the server was still preparing (for instance during a long workshop download)
+  # is already covered: without this the game would be stopped again right after it came up.
+  ic clear-stale-restart "${apply_started}"
 
   # The launch line, one argument per line (fluxkf2.py args).
   mapfile -t args < <(ic args)

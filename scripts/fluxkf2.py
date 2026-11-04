@@ -17,7 +17,7 @@
     flux-kf2 maps                 the official and the workshop maps, the map cycle, the map the server starts on
     flux-kf2 set-maps '<json>'    {"cycle": ["KF-Airship", ...], "start": "KF-Airship"}
     flux-kf2 mods                 the workshop items (id, title, size, downloaded, maps)
-    flux-kf2 set-mods '<json>'    {"ids": ["857015700", ...]}
+    flux-kf2 set-mods '<json>'    {"ids": ["857015700", ...], "mutators": ["Package.Class", ...]}
     flux-kf2 players              who is on the server now (the game's WebAdmin) and the ban list
     flux-kf2 kick <playerkey> | ban <playerkey> | map-now <map> [mode]   live actions through WebAdmin
     flux-kf2 bans | ban-id <steamid64> | unban-id <steamid64>   the ban list (WebAdmin when up, the ini when not)
@@ -121,6 +121,8 @@ DEFAULT_MAP = "KF-BioticsLab"
 MAP_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}$")
 STEAM_ID_RE = re.compile(r"^7656119\d{10}$")
 WORKSHOP_ID_RE = re.compile(r"^\d{5,12}$")
+MUTATOR_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}\.[A-Za-z][A-Za-z0-9_]{0,63}$")   # Package.Class
+MAX_MUTATORS = 10
 
 # env variable -> setting key
 ENV_KEYS = {
@@ -248,6 +250,15 @@ def env_set(name):
 
 def truthy(value):
     return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def env_int(name, default, minimum):
+    """An integer setting from the environment: a bad value is the default, a small one the minimum
+    (a 0 or a word must not make a backup delete itself)."""
+    try:
+        return max(minimum, int(str(os.environ.get(name, "")).strip() or default))
+    except ValueError:
+        return default
 
 
 def steam_id(value):
@@ -435,6 +446,8 @@ def check_key(key, kind, value):
             return "needs a name"
         if re.search(r"[\"?&]", value):
             return "cannot contain a double quote, ? or &"
+    if key == "AdminPassword" and not value:
+        return "is required: without it the web admin is off and the panel cannot list players, kick, ban or change the map"
     if key in SECRET_KEYS and value and re.search(r"[\s\"?&=#]", value):
         return "cannot contain spaces, quotes, ?, &, = or #"
     if key == "FriendlyFireScale" and not 0 <= float(value) <= 1:
@@ -490,6 +503,13 @@ def current_value(key):
     pending = load_pending().get("settings", {})
     if key in pending:
         return pending[key]
+    v = ini_get(load_ini(which), section, name)
+    return default if v is None else v
+
+
+def ini_value(key):
+    """What the game's ini holds for a setting NOW (not the panel's pending edit): what a running game was started with."""
+    _k, which, section, name, _t, default = SCHEMA[key]
     v = ini_get(load_ini(which), section, name)
     return default if v is None else v
 
@@ -693,6 +713,20 @@ def cmd_set_maps(args):
 # Workshop items
 # ------------------------------------------------------------------------------------------------
 
+def read_mutators():
+    muts = load_launch().get("mutators")
+    return [str(m) for m in muts if MUTATOR_RE.match(str(m))] if isinstance(muts, list) else []
+
+
+def write_mutators(muts):
+    launch = load_launch()
+    if muts:
+        launch["mutators"] = muts
+    else:
+        launch.pop("mutators", None)
+    write_json(LAUNCH_FILE, launch)
+
+
 def read_mod_ids():
     data = read_json(MODS_FILE, {})
     ids = data.get("ids") if isinstance(data, dict) else None
@@ -773,7 +807,7 @@ def cmd_mods(_args):
         items.append({"id": wid, "title": d.get("title") or "", "size": d.get("size") or 0, "found": d.get("found", None),
                       "downloaded": os.path.isdir(os.path.join(WORKSHOP_DIR, wid)) and bool(os.listdir(os.path.join(WORKSHOP_DIR, wid))),
                       "maps": item_maps(wid)})
-    out({"items": items, "ids": ids, "max": MAX_MODS})
+    out({"items": items, "ids": ids, "max": MAX_MODS, "mutators": read_mutators(), "maxMutators": MAX_MUTATORS})
 
 
 def cmd_set_mods(args):
@@ -788,12 +822,28 @@ def cmd_set_mods(args):
         fail(f"Not a workshop item id or link: {', '.join(bad[:5])}.")
     if len(ids) > MAX_MODS:
         fail(f"At most {MAX_MODS} workshop items.")
+    muts = None
+    if "mutators" in data:
+        raw = data["mutators"]
+        if not isinstance(raw, list):
+            fail('Expected {"mutators": ["Package.Class"]}.')
+        muts = []
+        for m in raw:
+            m = str(m).strip()
+            if not MUTATOR_RE.match(m):
+                fail(f"Not a mutator class (Package.Class, as the workshop page names it): {m[:60]}.")
+            if m not in muts:
+                muts.append(m)
+        if len(muts) > MAX_MUTATORS:
+            fail(f"At most {MAX_MUTATORS} mutators.")
     details = workshop_details(ids)
     missing = [i for i in ids if details.get(i, {}).get("found") is False]
     if missing:
         fail(f"The workshop has no item {', '.join(missing)}.")
     write_mod_ids(ids)
-    out({"ok": True, "count": len(ids), "restartNeeded": True})
+    if muts is not None:
+        write_mutators(muts)
+    out({"ok": True, "count": len(ids), "mutators": len(muts) if muts is not None else len(read_mutators()), "restartNeeded": True})
 
 
 def cmd_mods_ids(_args):
@@ -877,6 +927,14 @@ def apply_env(notes, first_run):
     changed = False
     for name, key in ENV_KEYS.items():
         if not env_set(name):
+            # A join password that was set by the deployment and is now emptied there is removed: the marketplace
+            # writes NAME= for a blank one. A blank on a first deploy changes nothing. The admin password is
+            # required, so an emptied one is kept.
+            if key == "GamePassword" and name in os.environ and applied.get(name):
+                set_values({key: ""}, direct=True)
+                notes.append(f"{key} = (none) ({name} emptied)")
+                applied[name] = ""
+                changed = True
             continue
         raw = os.environ[name]
         if not first_run and applied.get(name) == raw:
@@ -965,6 +1023,9 @@ def launch_url():
         url += f"?Difficulty={DIFFICULTIES.get(launch_value('Difficulty'), 0)}"
     if mode == "survival":
         url += f"?GameLength={LENGTHS.get(launch_value('GameLength'), 0)}"
+    muts = read_mutators()
+    if muts:
+        url += "?Mutator=" + ",".join(muts)
     return url
 
 
@@ -1094,7 +1155,8 @@ class WebAdmin:
 
 def webadmin():
     """A logged-in WebAdmin client, or None (with no raise) when the server is not up or the login fails."""
-    password = current_value("AdminPassword")
+    # The ini's password, not the panel's pending one: the running game still has the old one until it restarts.
+    password = ini_value("AdminPassword")
     port = load_state().get("webPort") or DEFAULT_WEB_PORT
     if not password:
         return None
@@ -1234,16 +1296,22 @@ def cmd_map_now(args):
     if not w:
         fail("The server's web admin is not reachable (is the server up, with an admin password set?).")
     extra = f"?Difficulty={DIFFICULTIES.get(launch_value('Difficulty'), 0)}?GameLength={LENGTHS.get(launch_value('GameLength'), 0)}?MaxPlayers={launch_value('MaxPlayers')}"
+    if read_mutators():
+        extra += "?Mutator=" + ",".join(read_mutators())
     w.get("/ServerAdmin/current/change", {"gametype": MODES[mode][0], "map": args[0], "mutatorGroupCount": "0",
                                           "urlextra": extra, "action": "change"})
     out({"ok": True, "map": args[0], "mode": mode})
 
 
-def guard_ban_state():
+def guard_ban_state(live):
     """The ini is edited only when the game is not running. While it starts or restarts its process is alive and would
-    overwrite the file, and its web admin is not up yet: say so instead of losing the ban."""
-    if load_state().get("state") in ("starting", "restarting"):
+    overwrite the file, and its web admin is not up yet: say so instead of losing the ban. A running game whose web admin
+    does not answer is the same: the ban list is not written behind its back."""
+    state = load_state().get("state")
+    if state in ("starting", "restarting"):
         fail("The server is starting. Try again when it says running: a ban written now would be overwritten.")
+    if state == "running" and not live:
+        fail("The server is running but its web admin did not answer, so the ban list cannot be changed now (a running game would undo an edit to its file). Try again in a moment.")
 
 
 def cmd_bans(_args):
@@ -1254,8 +1322,8 @@ def cmd_ban_id(args):
     sid = steam_id(args[0]) if args else None
     if not sid:
         fail("A SteamID64 is 17 digits starting 7656119.")
-    guard_ban_state()
     w = webadmin() if load_state().get("state") == "running" else None
+    guard_ban_state(w)
     if w:
         w.get("/ServerAdmin/policy/bans", {"action": "add", "steamint64": sid, "uniqueid": ""})
         out({"ok": True, "live": True, "id": sid})
@@ -1270,8 +1338,8 @@ def cmd_unban_id(args):
     sid = steam_id(args[0]) if args else None
     if not sid:
         fail("A SteamID64 is 17 digits starting 7656119.")
-    guard_ban_state()
     w = webadmin() if load_state().get("state") == "running" else None
+    guard_ban_state(w)
     if w:
         page = w.get("/ServerAdmin/policy/bans")
         rows = re.findall(r"<tr>(.*?)</tr>", page, re.S)
@@ -1319,8 +1387,19 @@ def prune_backups(keep):
     rows = list_backups()
     index = load_index()
     kept = 0
+    safety = 0
+    safety_max = env_int("FLUX_BACKUP_KEEP_SAFETY", 20, 1)
     for row in rows:
         if index.get(row["name"], {}).get("keep"):
+            # Safety copies are never rotated out by the regular count, but there is a ceiling (newest first),
+            # or every restore would add a copy for good.
+            safety += 1
+            if safety > safety_max:
+                try:
+                    os.remove(os.path.join(BACKUP_DIR, row["name"]))
+                except OSError:
+                    pass
+                index.pop(row["name"], None)
             continue
         kept += 1
         if kept > keep:
@@ -1382,7 +1461,7 @@ def make_backup(why, force=False):
     index = load_index()
     index[name] = {"time": int(time.time()), "why": why, "keep": why.startswith("before")}
     write_json(BACKUP_INDEX, index)
-    prune_backups(int(os.environ.get("FLUX_BACKUP_KEEP", "10")))
+    prune_backups(env_int("FLUX_BACKUP_KEEP", 10, 1))
     return [f"# backup {name} ({why}, {os.path.getsize(path) // 1024} KB)"]
 
 
@@ -1451,6 +1530,32 @@ def cmd_restore(args):
     out({"ok": True, "restarting": running, "name": name})
 
 
+def reassert_env_passwords(notes):
+    """After a restore the passwords are the deployment's again, as on every other start: an older backup holds
+    whatever they were then. A blank env that never set one leaves the panel's password alone."""
+    applied = read_json(ENV_APPLIED_FILE, {})
+    applied = applied if isinstance(applied, dict) else {}
+    changed = False
+    for name, key in (("KF2_ADMIN_PASSWORD", "AdminPassword"), ("KF2_JOIN_PASSWORD", "GamePassword")):
+        if name not in os.environ:
+            continue
+        raw = os.environ[name]
+        if raw.strip():
+            value = raw
+        elif key == "GamePassword" and applied.get(name):
+            value = ""   # set by the deployment and emptied there
+        else:
+            continue
+        _done, errors = set_values({key: value}, direct=True)
+        if errors:
+            notes.append(f"# WARN {name}: {errors[key]}; kept the restored value")
+            continue
+        applied[name] = raw
+        changed = True
+    if changed:
+        write_json(ENV_APPLIED_FILE, applied)
+
+
 def cmd_do_restore(_args):
     pending = read_json(RESTORE_FILE)
     if not isinstance(pending, dict):
@@ -1469,6 +1574,10 @@ def cmd_do_restore(_args):
     if restore_backup({"name": name}):
         # What the panel had saved and not yet applied is older than the backup being put back.
         save_pending({})
+        notes = []
+        reassert_env_passwords(notes)
+        for line in notes:
+            print(line)
         print(f"# restored {name}")
         write_json(LAST_RESTORE_FILE, {"name": name, "ok": True, "error": None, "time": int(time.time())})
     else:
@@ -1563,7 +1672,8 @@ def cmd_status(_args):
         "runningSince": state.get("runningSince"),
         "generation": int(state.get("generation") or 0),
         "serverName": current_value("ServerName"),
-        "maxPlayers": int(current_value("MaxPlayers") or 0),
+        # What the game will allow: it lowers the value to 6 outside Versus Survival.
+        "maxPlayers": min(int(current_value("MaxPlayers") or 0), 12 if launch_value("GameMode") == "versus" else 6),
         "passworded": bool(current_value("GamePassword")),
         "ports": {"game": state.get("gamePort"), "query": state.get("queryPort"), "web": state.get("webPort")},
         "build": installed_build(),
@@ -1575,6 +1685,7 @@ def cmd_status(_args):
         "gameLength": launch_value("GameLength"),
         "startMap": launch_value("StartMap"),
         "mods": len(read_mod_ids()),
+        "mutators": len(read_mutators()),
         "nextRestart": state.get("nextRestart"),
         "updateWaiting": state.get("updateWaiting"),
         "restartPending": os.path.exists(RESTART_MARKER),
@@ -1598,6 +1709,18 @@ def cmd_restart(_args):
         with open(RESTART_MARKER, "w", encoding="utf-8") as f:
             f.write(f"requested: from the panel\nnotbefore={not_before}\n")
     out({"ok": True, "restarting": True})
+
+
+def cmd_clear_stale_restart(args):
+    """Called right before the game starts, with the epoch second `apply` began: a restart asked for before that moment
+    (while the server was preparing) is already covered, because the game reads its files only now. One asked for later,
+    or a restore, keeps its restart. Without this the game would be stopped again right after it came up."""
+    try:
+        since = int(args[0])
+        if not os.path.exists(RESTORE_FILE) and os.path.getmtime(RESTART_MARKER) < since:
+            os.remove(RESTART_MARKER)
+    except (IndexError, ValueError, OSError):
+        pass
 
 
 def cmd_ready(_args):
@@ -1646,7 +1769,7 @@ COMMANDS = {
     "bans": cmd_bans, "ban-id": cmd_ban_id, "unban-id": cmd_unban_id, "restart": cmd_restart,
     "backups": cmd_backups, "backup": cmd_backup, "restore": cmd_restore, "do-restore": cmd_do_restore,
     "a2s": cmd_a2s, "serving": cmd_serving, "update-target": cmd_update_target, "update-check": cmd_update_check,
-    "update-skip": cmd_update_skip, "ready": cmd_ready,
+    "update-skip": cmd_update_skip, "ready": cmd_ready, "clear-stale-restart": cmd_clear_stale_restart,
 }
 
 

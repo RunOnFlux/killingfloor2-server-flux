@@ -202,6 +202,7 @@ check "a password with a space is refused" "1" "$(status ic set-settings '{"valu
 check "a name with a question mark is refused (it would break the launch line)" "1" "$(status ic set-settings '{"values": {"ServerName": "a?b"}}')"
 check "more slots than the game has are refused" "1" "$(status ic set-settings '{"values": {"MaxPlayers": 13}}')"
 check "the start map is the Maps tab's, not the form's" "1" "$(status ic set-settings '{"values": {"StartMap": "KF-Airship"}}')"
+check "the admin password cannot be emptied (the web admin and so the panel's live tabs need it)" "1" "$(status ic set-settings '{"values": {"AdminPassword": ""}}')"
 check "a refused batch changes nothing" "0.500000" "$(ic set-settings '{"values": {"FriendlyFireScale": 0.1, "Bogus": 1}}' >/dev/null; inival FriendlyFireScale "${gameini}")"
 
 # --- Maps --------------------------------------------------------------------------------------
@@ -231,6 +232,13 @@ check "too many items are refused" "1" "$(status ic set-mods "{\"ids\": [$(seq -
 check "the env list applies when it changes" "111111 222222" "$(ic KF2_WORKSHOP_IDS='111111, 222222' apply >/dev/null; ic mods-ids | tr '\n' ' ' | sed 's/ $//')"
 check "and not again when the panel changed it" "333333" "$(ic set-mods '{"ids": ["333333"]}' >/dev/null; ic KF2_WORKSHOP_IDS='111111, 222222' apply >/dev/null; ic mods-ids)"
 check "clearing the list removes the rows and the manager" "0" "$(ic set-mods '{"ids": []}' >/dev/null; ic apply >/dev/null; grep -c -E 'ServerSubscribedWorkshopItems=|SteamWorkshopDownload' "${engineini}")"
+check "a mutator is switched on by the launch line" "1" "$(ic set-mods '{"ids": [], "mutators": ["UnofficialKFPatch.UKFPMutator", "FriendlyHUD.FriendlyHUDMutator"]}' >/dev/null; ic args | head -1 | grep -c '?Mutator=UnofficialKFPatch.UKFPMutator,FriendlyHUD.FriendlyHUDMutator$')"
+check "the panel reads them back" "FriendlyHUD.FriendlyHUDMutator" "$(ic mods | jget mutators.1)"
+check "a workshop list saved without mutators keeps them" "2" "$(ic set-mods '{"ids": []}' >/dev/null; ic mods | python3 -c 'import json,sys;print(len(json.load(sys.stdin)["mutators"]))')"
+check "a mutator is not a free-form string" "1" "$(status ic set-mods '{"ids": [], "mutators": ["a b.c"]}')"
+check "a bare class name is refused (the package is needed)" "1" "$(status ic set-mods '{"ids": [], "mutators": ["Mutator"]}')"
+check "a refused list changes nothing" "2" "$(ic mods | python3 -c 'import json,sys;print(len(json.load(sys.stdin)["mutators"]))')"
+check "an empty list switches them off" "0" "$(ic set-mods '{"ids": [], "mutators": []}' >/dev/null; ic args | head -1 | grep -c Mutator)"
 ic set-mods '{"ids": ["857015700"]}' >/dev/null
 ic mods-install >/dev/null
 check "mods-install links the map into the game's Maps folder" "0" "$(status test -L "${server}/KFGame/BrewedPC/Maps/KF-MountainPass.kfm")"
@@ -250,6 +258,13 @@ check "a profile link is accepted" "0" "$(status ic ban-id https://steamcommunit
 check "an unban removes it" "0" "$(ic unban-id 76561198000000002 >/dev/null; grep -c 'A=39734274' "${gameini}")"
 check "not a SteamID64 is refused" "1" "$(status ic ban-id 12345)"
 check "a ban is refused while the game starts (the running process would overwrite the ini)" "1" "$(ic state starting >/dev/null; status ic ban-id 76561198000000007)"
+check "and while it runs with its web admin not answering (it would undo an edit to the ini)" "1" "$(ic state running >/dev/null; status ic ban-id 76561198000000007)"
+check "and the ban was not written" "0" "$(ic bans | grep -c 76561198000000007)"
+check "the web admin login uses the password the running game has, not the pending one" "adm1 adm9" "$(ic set-settings '{"values": {"AdminPassword": "adm9"}}' >/dev/null; FLUX_DATA_DIR="${data}" FLUX_SERVER_DIR="${server}" python3 -I -c '
+import sys; sys.path.insert(0, "scripts")
+import fluxkf2 as f
+print(f.ini_value("AdminPassword"), f.current_value("AdminPassword"))')"
+rm -f "${data}/flux/pending.json"
 ic state stopped >/dev/null
 check "unbanning someone not banned is refused" "1" "$(status ic unban-id 76561198000000009)"
 
@@ -318,7 +333,44 @@ check "after a backup was made of the state before" "1" "$([ "$(ic backups | pyt
 check "a path outside the backup folder is refused" "1" "$(status ic restore ../../etc/passwd)"
 check "a backup too young is skipped" "1" "$(ic backup again | grep -c skipped)"
 
+# --- Passwords and the deployment ---------------------------------------------------------------
+ic backup pwbase force >/dev/null
+pwbackup="$(ic backups | jget backups.0.name)"
+ic set-settings '{"values": {"GamePassword": "panelpw", "AdminPassword": "adm2"}}' >/dev/null
+ic apply >/dev/null
+check "a restore puts the deployment's passwords back, not the backup's" "pw9 adm9" "$(ic restore "${pwbackup}" >/dev/null; ic KF2_JOIN_PASSWORD=pw9 KF2_ADMIN_PASSWORD=adm9 do-restore >/dev/null; echo "$(inival GamePassword "${gameini}") $(inival AdminPassword "${gameini}")")"
+check "a join password the deployment emptied is removed" "" "$(ic KF2_JOIN_PASSWORD= apply >/dev/null; inival GamePassword "${gameini}")"
+check "an admin password the deployment emptied is kept (it is required)" "adm9" "$(ic KF2_ADMIN_PASSWORD= apply >/dev/null; inival AdminPassword "${gameini}")"
+check "a blank join password on a deployment that never set one leaves the panel's" "panelpw" "$(rm -f "${data}/flux/env-applied.json"; ic set-settings '{"values": {"GamePassword": "panelpw"}}' >/dev/null; ic KF2_JOIN_PASSWORD= apply >/dev/null; inival GamePassword "${gameini}")"
+ic KF2_JOIN_PASSWORD=pw1 KF2_ADMIN_PASSWORD=adm1 apply >/dev/null
+check "safety copies have a ceiling" "2" "$(for i in 1 2 3 4; do ic FLUX_BACKUP_KEEP_SAFETY=2 backup "before test ${i}" force >/dev/null; done; ic backups | python3 -c 'import json,sys;print(sum(1 for b in json.load(sys.stdin)["backups"] if b["keep"]))')"
+check "a bad backup count is the default, a zero is one" "ok" "$(FLUX_BACKUP_KEEP=0 python3 -I -c '
+import sys, os; sys.path.insert(0, "scripts")
+import fluxkf2 as f
+assert f.env_int("FLUX_BACKUP_KEEP", 10, 1) == 1
+os.environ["FLUX_BACKUP_KEEP"] = "many"
+assert f.env_int("FLUX_BACKUP_KEEP", 10, 1) == 10
+print("ok")')"
+
+# --- A restart asked for while the server was preparing -----------------------------------------
+now="$(date +%s)"
+printf 'requested: from the panel\nnotbefore=0\n' >"${tmp}/restart-marker"
+touch -d '2 minutes ago' "${tmp}/restart-marker"
+ic clear-stale-restart "${now}"
+check "is dropped before the game starts (the game reads its files now)" "1" "$(status test -f "${tmp}/restart-marker")"
+printf 'requested: from the panel\nnotbefore=0\n' >"${tmp}/restart-marker"
+ic clear-stale-restart "$((now - 100))"
+check "one asked for after the files were read is kept" "0" "$(status test -f "${tmp}/restart-marker")"
+touch -d '2 minutes ago' "${tmp}/restart-marker"
+echo '{"name": "x"}' >"${data}/flux/restore-pending.json"
+ic clear-stale-restart "${now}"
+check "and so is any when a restore is waiting" "0" "$(status test -f "${tmp}/restart-marker")"
+rm -f "${tmp}/restart-marker" "${data}/flux/restore-pending.json"
+
 # --- Status and restart ------------------------------------------------------------------------
+check "status: Max Players is what the game allows (6 outside Versus)" "6" "$(ic set-settings '{"values": {"MaxPlayers": 12, "GameMode": "survival"}}' >/dev/null; ic status | jget maxPlayers)"
+check "status: and 12 in Versus Survival" "12" "$(ic set-settings '{"values": {"GameMode": "versus"}}' >/dev/null; ic status | jget maxPlayers)"
+ic set-settings '{"values": {"GameMode": "survival"}}' >/dev/null
 ic state running >/dev/null
 check "status: state" "running" "$(ic status | jget state)"
 check "status: build" "14007421" "$(ic status | jget build)"

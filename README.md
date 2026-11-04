@@ -95,6 +95,7 @@ inside the 10 seconds Flux gives a container.
 ## Versions
 
 - 1.0.0: first version.
+- 1.0.1: workshop mutators (`?Mutator=` in the launch line and in Play now, listed with `set-mods`); a restore keeps the deployment's passwords; a join password emptied in the deployment is removed; the admin password cannot be emptied; the web admin login uses the password the running game has; bans are never written to the ini of a running game; safety backups capped at 20 (`FLUX_BACKUP_KEEP_SAFETY`); a restart asked for while the server was preparing no longer stops it again after it starts; `status` shows Max Players as the game allows it.
 
 ## Measured
 
