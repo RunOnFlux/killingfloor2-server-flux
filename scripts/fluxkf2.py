@@ -1142,6 +1142,13 @@ class WebAdmin:
         with self.opener.open(self.base + path, body, timeout=8) as r:
             return r.read().decode("utf-8", errors="replace")
 
+    def call(self, path, data=None):
+        """get, but a web admin that stops answering (a restart, a hang) is an answer, not a traceback."""
+        try:
+            return self.get(path, data)
+        except (OSError, urllib.error.URLError, ValueError):
+            fail("The server's web admin stopped answering. Try again in a moment.")
+
     def login(self):
         page = self.get("/ServerAdmin/")
         m = re.search(r'name="token" value="(\w+)"', page)
@@ -1262,13 +1269,13 @@ def player_action(key, want):
     w = webadmin()
     if not w:
         fail("The server's web admin is not reachable (is the server up, with an admin password set?).")
-    page = w.get("/ServerAdmin/current/players")
+    page = w.call("/ServerAdmin/current/players")
     for p in parse_players(page):
         if p["key"] == key:
             action = pick_action(p["actions"], want)
             if not action:
                 fail(f"The web admin does not offer '{want}' for this player.")
-            w.get("/ServerAdmin/current/players", {"ajax": "1", "action": action, "playerkey": key, "playerid": p["playerId"]})
+            w.call("/ServerAdmin/current/players", {"ajax": "1", "action": action, "playerkey": key, "playerid": p["playerId"]})
             out({"ok": True, "action": action, "name": p["name"]})
             return
     fail("That player is no longer on the server.")
@@ -1298,7 +1305,7 @@ def cmd_map_now(args):
     extra = f"?Difficulty={DIFFICULTIES.get(launch_value('Difficulty'), 0)}?GameLength={LENGTHS.get(launch_value('GameLength'), 0)}?MaxPlayers={launch_value('MaxPlayers')}"
     if read_mutators():
         extra += "?Mutator=" + ",".join(read_mutators())
-    w.get("/ServerAdmin/current/change", {"gametype": MODES[mode][0], "map": args[0], "mutatorGroupCount": "0",
+    w.call("/ServerAdmin/current/change", {"gametype": MODES[mode][0], "map": args[0], "mutatorGroupCount": "0",
                                           "urlextra": extra, "action": "change"})
     out({"ok": True, "map": args[0], "mode": mode})
 
@@ -1325,7 +1332,7 @@ def cmd_ban_id(args):
     w = webadmin() if load_state().get("state") == "running" else None
     guard_ban_state(w)
     if w:
-        w.get("/ServerAdmin/policy/bans", {"action": "add", "steamint64": sid, "uniqueid": ""})
+        w.call("/ServerAdmin/policy/bans", {"action": "add", "steamint64": sid, "uniqueid": ""})
         out({"ok": True, "live": True, "id": sid})
         return
     ids = banned_from_ini()
@@ -1341,13 +1348,13 @@ def cmd_unban_id(args):
     w = webadmin() if load_state().get("state") == "running" else None
     guard_ban_state(w)
     if w:
-        page = w.get("/ServerAdmin/policy/bans")
+        page = w.call("/ServerAdmin/policy/bans")
         rows = re.findall(r"<tr>(.*?)</tr>", page, re.S)
         for row in rows:
             if sid in row:
                 m = re.search(r'name="banid" value="([^"]*)"', row)
                 if m:
-                    w.get("/ServerAdmin/policy/bans", {"banid": html.unescape(m.group(1)), "action": "delete"})
+                    w.call("/ServerAdmin/policy/bans", {"banid": html.unescape(m.group(1)), "action": "delete"})
                     out({"ok": True, "live": True, "id": sid})
                     return
         fail("That account is not banned.")
