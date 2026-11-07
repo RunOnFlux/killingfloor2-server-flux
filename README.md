@@ -96,6 +96,7 @@ inside the 10 seconds Flux gives a container.
 
 - 1.0.0: first version.
 - 1.0.1: workshop mutators (`?Mutator=` in the launch line and in Play now, listed with `set-mods`); a restore keeps the deployment's passwords; a join password emptied in the deployment is removed; the admin password cannot be emptied; the web admin login uses the password the running game has; bans are never written to the ini of a running game; safety backups capped at 20 (`FLUX_BACKUP_KEEP_SAFETY`); a restart asked for while the server was preparing no longer stops it again after it starts; `status` shows Max Players as the game allows it.
+- 1.0.2: a stop during the Steam download ends as stopped, not crashed; only a port the server cannot use waits for a fix (any other failure of the start ends the container so the platform restarts it); a workshop list emptied in the deployment clears the mods; a panel edit saved while a start reads the pending file is kept; a pending edit for an unknown setting is dropped; the restart marker is written atomically; the ban list shown is capped at 1000 (`bannedTotal` has the real count); the weekly security rebuild no longer reuses a cached `apt-get upgrade` layer.
 
 ## Measured
 

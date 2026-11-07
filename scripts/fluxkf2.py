@@ -524,7 +524,12 @@ def flush_pending(notes):
     settings = pending.get("settings") or {}
     keep = {}
     texts = {}
+    dropped = 0
     for key, text in settings.items():
+        if key not in SCHEMA:
+            dropped += 1
+            notes.append(f"WARN pending edit {key!r} is not a known setting; dropped")
+            continue
         _k, which, section, name, _t, _d = SCHEMA[key]
         if which == "engine" and not os.path.exists(ini_path("engine")):
             keep[key] = text
@@ -539,9 +544,16 @@ def flush_pending(notes):
         save_ini(which, text)
     if keep:
         left["settings"] = keep
-    n = len(settings) - len(keep) + (1 if cycle else 0)
+    n = len(settings) - len(keep) - dropped + (1 if cycle else 0)
     if n:
         notes.append(f"{n} edit(s) from the panel written into the game's ini files")
+    # An edit the panel saved while this ran is not in what was read above: keep it.
+    latest = load_pending()
+    newer = {k: v for k, v in (latest.get("settings") or {}).items() if settings.get(k) != v}
+    if newer:
+        left.setdefault("settings", {}).update(newer)
+    if latest.get("cycle") and latest.get("cycle") != cycle:
+        left["cycle"] = latest["cycle"]
     save_pending(left)
 
 
@@ -958,6 +970,11 @@ def apply_env(notes, first_run):
         notes.append(f"workshop items = {','.join(ids) or 'none'} ({ENV_MODS})")
         applied[ENV_MODS] = os.environ[ENV_MODS]
         changed = True
+    if (not env_set(ENV_MODS) and ENV_MODS in os.environ and applied.get(ENV_MODS)):
+        write_mod_ids([], ini=True)
+        notes.append(f"workshop items = none ({ENV_MODS} emptied)")
+        applied[ENV_MODS] = ""
+        changed = True
     if changed:
         write_json(ENV_APPLIED_FILE, applied)
 
@@ -1261,7 +1278,8 @@ def cmd_players(_args):
     for p in players:
         p["banned"] = p["steamId"] in banned
         p["canKick"] = pick_action(p.pop("actions"), "kick") is not None
-    out({"players": players, "live": live, "banned": banned,
+    shown_bans, banned_total = banned[:MAX_BANS_SHOWN], len(banned)
+    out({"players": players, "live": live, "banned": shown_bans, "bannedTotal": banned_total,
          "webAdmin": bool(current_value("AdminPassword"))})
 
 
@@ -1321,8 +1339,17 @@ def guard_ban_state(live):
         fail("The server is running but its web admin did not answer, so the ban list cannot be changed now (a running game would undo an edit to its file). Try again in a moment.")
 
 
+MAX_BANS_SHOWN = 1000  # about 21 bytes each: the answer must stay under the 32 KiB appexec carries
+
+
+def capped_bans():
+    banned = banned_from_ini()
+    return banned[:MAX_BANS_SHOWN], len(banned)
+
+
 def cmd_bans(_args):
-    out({"banned": banned_from_ini()})
+    banned, total = capped_bans()
+    out({"banned": banned, "bannedTotal": total})
 
 
 def cmd_ban_id(args):
@@ -1527,8 +1554,10 @@ def touch_or_make_marker(why, not_before):
         except OSError:
             pass
         return
-    with open(RESTART_MARKER, "w", encoding="utf-8") as f:
+    tmp = f"{RESTART_MARKER}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         f.write(f"{why}\nnotbefore={not_before}\n")
+    os.replace(tmp, RESTART_MARKER)
 
 
 def request_restart(why):

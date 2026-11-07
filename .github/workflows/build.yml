@@ -95,6 +95,7 @@ jobs:
           load: true
           build-args: |
             FLUX_IMAGE_VERSION=${{ env.VERSION }}
+            PACKAGES_REFRESH=${{ github.run_id }}
             BASE_IMAGE=${{ needs.check.outputs.base }}@${{ needs.check.outputs.base_digest }}
           tags: ${{ env.IMAGE_NAME }}:${{ github.sha }}
           labels: |

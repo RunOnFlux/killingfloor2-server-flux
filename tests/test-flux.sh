@@ -232,6 +232,11 @@ check "too many items are refused" "1" "$(status ic set-mods "{\"ids\": [$(seq -
 check "the env list applies when it changes" "111111 222222" "$(ic KF2_WORKSHOP_IDS='111111, 222222' apply >/dev/null; ic mods-ids | tr '\n' ' ' | sed 's/ $//')"
 check "and not again when the panel changed it" "333333" "$(ic set-mods '{"ids": ["333333"]}' >/dev/null; ic KF2_WORKSHOP_IDS='111111, 222222' apply >/dev/null; ic mods-ids)"
 check "clearing the list removes the rows and the manager" "0" "$(ic set-mods '{"ids": []}' >/dev/null; ic apply >/dev/null; grep -c -E 'ServerSubscribedWorkshopItems=|SteamWorkshopDownload' "${engineini}")"
+check "a workshop list the deployment emptied is cleared" "0" "$(ic KF2_WORKSHOP_IDS=111111 apply >/dev/null; ic KF2_WORKSHOP_IDS= apply >/dev/null; ic mods-ids | grep -c .)"
+check "a blank workshop list on a deployment that never set one leaves the panel's" "444444" "$(rm -f "${data}/flux/env-applied.json"; ic set-mods '{"ids": ["444444"]}' >/dev/null; ic KF2_WORKSHOP_IDS= apply >/dev/null; ic mods-ids)"
+ic set-mods '{"ids": []}' >/dev/null
+check "a pending edit for a setting that no longer exists does not break apply" "0" "$(printf '{"settings": {"NoSuchKey": "1"}}' >"${data}/flux/pending.json"; status ic apply)"
+check "and is dropped" "False" "$(ic status | jget pending)"
 check "a mutator is switched on by the launch line" "1" "$(ic set-mods '{"ids": [], "mutators": ["UnofficialKFPatch.UKFPMutator", "FriendlyHUD.FriendlyHUDMutator"]}' >/dev/null; ic args | head -1 | grep -c '?Mutator=UnofficialKFPatch.UKFPMutator,FriendlyHUD.FriendlyHUDMutator$')"
 check "the panel reads them back" "FriendlyHUD.FriendlyHUDMutator" "$(ic mods | jget mutators.1)"
 check "a workshop list saved without mutators keeps them" "2" "$(ic set-mods '{"ids": []}' >/dev/null; ic mods | python3 -c 'import json,sys;print(len(json.load(sys.stdin)["mutators"]))')"

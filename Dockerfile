@@ -18,7 +18,11 @@ ARG FLUX_IMAGE_VERSION=dev
 
 # libcurl4t64 is the one library the server needs that the base lacks (measured: it exits at once without
 # it). SDL2, the Steam API and the EOS SDK ship with the game in Binaries/Win64/lib64.
-RUN apt-get update -y && \
+# Changes on every CI run, so the layer below is never reused from the build cache: a rebuild asked for
+# by a security update must run apt again.
+ARG PACKAGES_REFRESH=0
+RUN echo "packages refresh ${PACKAGES_REFRESH}" >/dev/null && \
+    apt-get update -y && \
     apt-get upgrade -y --no-install-recommends && \
     apt-get install -y --no-install-recommends \
         ca-certificates curl procps tzdata python3 libcurl4t64 && \

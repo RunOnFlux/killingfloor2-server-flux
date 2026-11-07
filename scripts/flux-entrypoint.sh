@@ -172,7 +172,7 @@ update_server() {
       flux_log "server build $(flux_installed_build "${s}/steamapps/appmanifest_${FLUX_STEAM_APP}.acf")"
       return 0
     fi
-    [ "${terminating}" = "1" ] && return 1
+    [ "${terminating}" = "1" ] && return 2
     if ! grep -aq "Missing configuration" /tmp/steamcmd.log; then
       validate="validate"
     fi
@@ -308,7 +308,10 @@ start_generation() {
   # A state left by the container that was here before (a kill, a node reboot) is stale from now on.
   ic state updating "Preparing the server"
 
-  update_server || return 1
+  update_server
+  local update_rc=$?
+  [ "${update_rc}" = "2" ] && return 2
+  [ "${update_rc}" != "0" ] && return 1
   while IFS= read -r line; do flux_log "${line#\# }"; done < <(ic update-check 2>&1)
   [ "${terminating}" = "1" ] && return 2
   # A restore the panel asked for, before anything reads the server's files.
@@ -318,13 +321,18 @@ start_generation() {
   # A restart the panel asked for before this moment is covered by what apply and the mods step read now.
   local applied apply_started
   apply_started="$(date -u +%s)"
-  if applied="$(ic apply 2>/tmp/flux-apply.err)"; then
+  local apply_rc=0
+  applied="$(ic apply 2>/tmp/flux-apply.err)" || apply_rc=$?
+  if [ "${apply_rc}" = "0" ]; then
     while IFS= read -r line; do [ -n "${line}" ] && flux_log "config: ${line#\# }"; done <<<"${applied}"
   else
     while IFS= read -r line; do [ -n "${line}" ] && flux_log "config: ${line#\# }"; done <<<"${applied}"
     printf '%s\n' "${applied}" >/tmp/flux-apply.out
     flux_log "ERROR the settings could not be applied: $(grep -h ERROR <<<"${applied}" | tr '\n' ' ')$(tail -3 /tmp/flux-apply.err | tr '\n' ' ')"
-    return 3
+    # Exit 2 is the environment (a port the server cannot use): restarting cannot fix it. Anything else
+    # (a crash in apply, a full disk) ends the container so the platform starts it again.
+    [ "${apply_rc}" = "2" ] && return 3
+    return 1
   fi
 
   # The game writes its engine ini on its first start and must not be handed a partial one (see
