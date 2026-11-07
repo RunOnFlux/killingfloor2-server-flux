@@ -136,6 +136,7 @@ ENV_KEYS = {
     "KF2_START_MAP": "StartMap",
 }
 ENV_MODS = "KF2_WORKSHOP_IDS"
+REVERTING_KEYS = {"GameMode", "Difficulty", "GameLength"}  # a cleared deployment value puts the game default back
 SECRET_KEYS = {"AdminPassword", "GamePassword"}
 
 # The settings. `file` is "game" or "engine" (an ini of the config folder) or "launch" (the first argument of
@@ -945,6 +946,12 @@ def apply_env(notes, first_run):
             if key == "GamePassword" and name in os.environ and applied.get(name):
                 set_values({key: ""}, direct=True)
                 notes.append(f"{key} = (none) ({name} emptied)")
+                applied[name] = ""
+                changed = True
+            elif key in REVERTING_KEYS and name in os.environ and applied.get(name):
+                # The mode, difficulty or length the deployment set and then cleared: back to what the game ships.
+                set_values({key: SCHEMA[key][5]}, direct=True)
+                notes.append(f"{key} = {SCHEMA[key][5]} ({name} emptied, the game's default)")
                 applied[name] = ""
                 changed = True
             continue

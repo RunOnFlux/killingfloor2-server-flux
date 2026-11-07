@@ -232,6 +232,9 @@ check "too many items are refused" "1" "$(status ic set-mods "{\"ids\": [$(seq -
 check "the env list applies when it changes" "111111 222222" "$(ic KF2_WORKSHOP_IDS='111111, 222222' apply >/dev/null; ic mods-ids | tr '\n' ' ' | sed 's/ $//')"
 check "and not again when the panel changed it" "333333" "$(ic set-mods '{"ids": ["333333"]}' >/dev/null; ic KF2_WORKSHOP_IDS='111111, 222222' apply >/dev/null; ic mods-ids)"
 check "clearing the list removes the rows and the manager" "0" "$(ic set-mods '{"ids": []}' >/dev/null; ic apply >/dev/null; grep -c -E 'ServerSubscribedWorkshopItems=|SteamWorkshopDownload' "${engineini}")"
+check "a mode the deployment set and then cleared goes back to the game's default" "survival" "$(ic KF2_GAME_MODE=versus apply >/dev/null; ic KF2_GAME_MODE= apply >/dev/null; ic status | jget mode)"
+check "a blank mode on a deployment that never set one leaves the panel's" "versus" "$(rm -f "${data}/flux/env-applied.json"; ic set-settings '{"values": {"GameMode": "versus"}}' >/dev/null; ic KF2_GAME_MODE= apply >/dev/null; ic status | jget mode)"
+ic set-settings '{"values": {"GameMode": "survival"}}' >/dev/null
 check "a workshop list the deployment emptied is cleared" "0" "$(ic KF2_WORKSHOP_IDS=111111 apply >/dev/null; ic KF2_WORKSHOP_IDS= apply >/dev/null; ic mods-ids | grep -c .)"
 check "a blank workshop list on a deployment that never set one leaves the panel's" "444444" "$(rm -f "${data}/flux/env-applied.json"; ic set-mods '{"ids": ["444444"]}' >/dev/null; ic KF2_WORKSHOP_IDS= apply >/dev/null; ic mods-ids)"
 ic set-mods '{"ids": []}' >/dev/null
