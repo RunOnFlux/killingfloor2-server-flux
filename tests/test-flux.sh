@@ -36,6 +36,12 @@ check "restart time 24:00 refused" "1" "$(status flux_restart_time 24:00)"
 # 2026-10-11 12:00 UTC = 1791720000
 check "next 05:00 after noon is tomorrow" "$((1791720000 - 43200 + 86400 + 18000))" "$(flux_next_daily 1791720000 05:00)"
 check "next 13:30 after noon is today" "$((1791720000 + 5400))" "$(flux_next_daily 1791720000 13:30)"
+# Clock changes (Europe/Lisbon, 2026): 10-25 a 25 h day, 03-29 a 23 h day; New York 2027-03-14 skips 02:00-03:00.
+lis() { TZ=Europe/Lisbon date -d "@$(TZ=Europe/Lisbon flux_next_daily "$(TZ=Europe/Lisbon date -d "$1" +%s)" "$2")" '+%F %H:%M'; }
+check "the 25-hour day: 00:15 passed, the next is tomorrow's, not a repeat an hour on" "2026-10-26 00:15" "$(lis '2026-10-25 00:30' 00:15)"
+check "the 23-hour day: 23:30 asking for 23:00 gets the next day, not a skipped one" "2026-03-29 23:00" "$(lis '2026-03-28 23:30' 23:00)"
+ny() { TZ=America/New_York date -d "@$(TZ=America/New_York flux_next_daily "$(TZ=America/New_York date -d "$1" +%s)" "$2")" '+%F %H:%M'; }
+check "a time the clocks skip is taken an hour later, not turned off" "2027-03-14 03:30" "$(ny '2027-03-13 20:00' 02:30)"
 check "the game is found by its binary name" "KFGameSteamServer.bin.x86_64" "$(printf 'x\n./Binaries/Win64/KFGameSteamServer.bin.x86_64 kf-bioticslab?Game=x -Port=7777\n' | grep -o -E "${FLUX_GAME_PATTERN}")"
 check "and pgrep's own command line is not" "1" "$(status bash -c "echo 'pgrep -f ${FLUX_GAME_PATTERN}' | grep -q -E '${FLUX_GAME_PATTERN}'")"
 

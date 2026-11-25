@@ -148,7 +148,19 @@ bootstrap_config() {
 }
 
 update_server() {
-  local attempt validate
+  local attempt validate steam_home
+  # SteamCMD's depotcache onto the INSTALL volume (local to the node, never synced). It holds the manifests of
+  # the installed build, which the NEXT update needs and which Steam refuses to an anonymous login once a build
+  # is old; in the container's own layer they are lost on every redeploy and the first update after it fails
+  # with "state is 0x6 after update job" (Icarus, Rust, DST). The fresh-install fallback those images have is
+  # NOT ported: it needs the old and the new build on the disk at once (about 64 GB for this game).
+  steam_home="${HOME:-/root}/.local/share/Steam"
+  mkdir -p "${s}/flux-steam/depotcache" "${steam_home}"
+  if [ ! -L "${steam_home}/depotcache" ]; then
+    [ -d "${steam_home}/depotcache" ] && cp -an "${steam_home}/depotcache/." "${s}/flux-steam/depotcache/" 2>/dev/null
+    rm -rf "${steam_home}/depotcache"
+    ln -s "${s}/flux-steam/depotcache" "${steam_home}/depotcache"
+  fi
   if flux_truthy "${SKIP_UPDATE:-}" && [ -f "${s}/${FLUX_GAME_EXE}" ]; then
     flux_log "SKIP_UPDATE is set: not updating the server files"
     return 0
@@ -159,6 +171,7 @@ update_server() {
   # install that is actually broken fails the first attempt, and every retry validates.
   validate=""
   for attempt in 1 2 3 4 5; do
+    [ "${terminating}" = "1" ] && return 2
     # app_info_update first: a fresh SteamCMD answers "Missing configuration" to the very first
     # app_update of this app (measured 2026-10-24) and stops; the next attempt works. That error is
     # retried at once WITHOUT validate (validate re-hashes the whole 32 GB install).
@@ -173,6 +186,12 @@ update_server() {
       return 0
     fi
     [ "${terminating}" = "1" ] && return 2
+    if grep -aqE "state is 0x6( |$)" /tmp/steamcmd.log; then
+      # Steam will not hand an old build's manifests to an anonymous login: neither a retry nor `validate`
+      # (which re-hashes all 32 GB) gets past it. Start what is installed instead of five more attempts.
+      flux_log "WARN Steam no longer serves the installed build's manifests (state is 0x6): not retrying"
+      break
+    fi
     if ! grep -aq "Missing configuration" /tmp/steamcmd.log; then
       validate="validate"
     fi
